@@ -1,11 +1,25 @@
-from fastapi import FastAPI, Body, Path, Query
+from fastapi import FastAPI, Body, Path, Query, Request, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security.http import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Coroutine, Optional, List
+from jwt_manager import create_token, validate_token
+from fastapi.security import HTTPBearer
 
 app = FastAPI() # uvicorn main:app --reload 
 app.title = "Prueba de FastAPI"
 app.version = "0.0.1"
+
+class JWTBearer(HTTPBearer):
+    async def __call__(self, request: Request):        
+        auth = await super().__call__(request)
+        data = validate_token(auth.credentials)
+        if data["email"] != "admin@gmail.com":
+            raise HTTPException(status_code=403, detail="Credenciales invalidas")        
+
+class User(BaseModel):
+    email:str
+    password:str
 
 class Movie(BaseModel):
     id: Optional[int] = None
@@ -16,7 +30,7 @@ class Movie(BaseModel):
     category: str
     
     class Config:
-        schema_extra = {            
+        json_schema_extra = {            
             "example":{
                 "id":1,
                 "title":"Mi pelicula",
@@ -45,11 +59,19 @@ movies = [
     }
 ]
 
+
+
 @app.get('/', tags=["home"])
 def message():
     return HTMLResponse("<h1>Aguante San Lorenzo!</h1>")
 
-@app.get("/movies", tags=["movies"], response_model=List[Movie], status_code=200)
+@app.get("/login", tags=["auth"])
+def login(user: User):
+    if user.email == "admin@gmail.com" and user.password == "admin":
+        token: str = create_token(user.dict())
+        return JSONResponse(status_code=200, content=token)    
+
+@app.get("/movies", tags=["movies"], response_model=List[Movie], status_code=200, dependencies=[Depends(JWTBearer())])
 def get_movies() -> List[Movie]:
     return JSONResponse(status_code=200, content=movies)
 
@@ -69,7 +91,7 @@ def get_movies_by_categories(category: str = Query(min_length=5, max_length=25))
 
 @app.post("/movies", tags=["movies"], response_model=dict, status_code=201)
 def create_movie(movie: Movie) -> dict:
-    movies.append(movie)
+    movies.append(movie.model_dump())
     return JSONResponse(status_code=201, content={"message": "Se ha registrado la pelicula"})
 
 @app.put("/movies/{id}", tags=["movies"], response_model=dict, status_code=200)
